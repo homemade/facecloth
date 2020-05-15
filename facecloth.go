@@ -17,7 +17,7 @@ type APIClient struct {
 }
 
 type Logger interface {
-	Printf(format string, a ...interface{}) (n int, err error)
+	Log(args ...interface{})
 }
 
 type CreateFundraiserParams struct {
@@ -121,7 +121,7 @@ func (c APIClient) CreateFundraiser(params CreateFundraiserParams, options ...fu
 	return string(resBody), status, nil
 }
 
-func AddFundraiserCoverPhoto(name string, content io.Reader) func(*multipart.Writer) error {
+func WithFundraiserCoverPhoto(name string, content io.Reader) func(*multipart.Writer) error {
 	return func(w *multipart.Writer) error {
 		part, err := w.CreateFormFile("cover_photo", name)
 		if err != nil {
@@ -132,7 +132,7 @@ func AddFundraiserCoverPhoto(name string, content io.Reader) func(*multipart.Wri
 	}
 }
 
-func AddFundraiserField(name string, value string) func(*multipart.Writer) error {
+func WithFundraiserField(name string, value string) func(*multipart.Writer) error {
 	return func(w *multipart.Writer) error {
 		return w.WriteField(name, value)
 	}
@@ -152,9 +152,9 @@ func (c APIClient) readResponse(req *http.Request, res *http.Response, expecteds
 	defer func() {
 		if c.logger != nil && (c.debugModeEnabled || err != nil) {
 			if len(body) > 0 {
-				c.logger.Printf("API %s request to %s returned %d %s\n", req.Method, req.URL.String(), status, string(body))
+				c.logger.Log(fmt.Sprintf("facebook api %s request to %s returned %d %s\n", req.Method, req.URL.String(), status, string(body)))
 			} else {
-				c.logger.Printf("API %s request to %s returned %d\n", req.Method, req.URL.String(), status)
+				c.logger.Log(fmt.Sprintf("facebook api %s request to %s returned %d\n", req.Method, req.URL.String(), status))
 			}
 		}
 	}()
