@@ -1,4 +1,4 @@
-package facecloth
+package flannel
 
 import (
 	"bytes"
