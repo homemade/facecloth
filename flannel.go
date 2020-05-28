@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -113,6 +114,9 @@ func (c APIClient) CreateFundraiser(params CreateFundraiserParams, options ...fu
 
 	var res *http.Response
 	res, err = c.httpClient.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("error transporting request %v", err)
+	}
 
 	var resBody []byte
 	status, resBody, err = c.readResponse(req, res, http.StatusOK)
@@ -121,13 +125,30 @@ func (c APIClient) CreateFundraiser(params CreateFundraiserParams, options ...fu
 	return string(resBody), status, nil
 }
 
-func WithFundraiserCoverPhoto(name string, content io.Reader) func(*multipart.Writer) error {
+func WithFundraiserCoverPhotoImage(name string, content io.Reader) func(*multipart.Writer) error {
 	return func(w *multipart.Writer) error {
 		part, err := w.CreateFormFile("cover_photo", name)
 		if err != nil {
 			return err
 		}
-		_, err = io.Copy(part, content)
+		_, err = io.Copy(part, io.LimitReader(content, (4*1024*1024)-1)) // images must be less than 4 MB
+		return err
+	}
+}
+
+func WithFundraiserCoverPhotoURL(name string, content url.URL) func(*multipart.Writer) error {
+	return func(w *multipart.Writer) error {
+		part, err := w.CreateFormFile("cover_photo", name)
+		if err != nil {
+			return err
+		}
+		httpClient := &http.Client{Timeout: time.Second * 20}
+		res, err := httpClient.Get(content.String())
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		_, err = io.Copy(part, io.LimitReader(res.Body, (4*1024*1024)-1)) // images must be less than 4 MB
 		return err
 	}
 }

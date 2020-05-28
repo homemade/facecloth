@@ -47,7 +47,7 @@ func TestCreateFundraiser(t *testing.T) {
 		t.Fatalf("failed to read cover photo %v", err)
 	}
 	defer coverPhoto.Close()
-	id, status, err = c.CreateFundraiser(params, WithFundraiserCoverPhoto("FundraiserCoverPhoto.jpg", coverPhoto))
+	id, status, err = c.CreateFundraiser(params, WithFundraiserCoverPhotoImage("FundraiserCoverPhoto.jpg", coverPhoto))
 	if err != nil {
 		t.Fatalf("failed to create fundraiser with cover photo %v", err)
 	}
