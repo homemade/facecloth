@@ -2,6 +2,8 @@ package flannel
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -20,6 +22,56 @@ type APIClient struct {
 type Logger interface {
 	Log(args ...interface{})
 }
+
+type FundraiserCoverPhotoReader struct {
+	Reader    io.Reader
+	MaxSize   int
+	bytesRead int
+}
+
+var ErrFundraiserCoverPhotoMaxSizeExceeded = errors.New("fundraiser cover photo max size exceeded")
+
+func (r *FundraiserCoverPhotoReader) Read(p []byte) (n int, err error) {
+	n, err = r.Reader.Read(p)
+	r.bytesRead = r.bytesRead + n
+	if r.bytesRead > r.MaxSize {
+		// if we have exceeded the max size then override the error
+		err = ErrFundraiserCoverPhotoMaxSizeExceeded
+	}
+	return
+}
+
+type FacebookError struct {
+	Endpoint string
+
+	Status int
+
+	// ErrorMap contains returned Facebook error values.
+	// See https://developers.facebook.com/docs/graph-api/using-graph-api/error-handling/
+	ErrorMap map[string]interface{}
+}
+
+func (e FacebookError) Error() string {
+	return fmt.Sprintf("%s %d %v", e.Endpoint, e.Status, e.ErrorMap)
+}
+
+func (e FacebookError) ErrorCodes() (code int, subcode int) {
+	rawCode := e.ErrorMap["code"]
+	if rawCode != nil {
+		if f, ok := rawCode.(float64); ok {
+			code = int(f)
+		}
+	}
+	rawSubCode := e.ErrorMap["error_subcode"]
+	if rawSubCode != nil {
+		if f, ok := rawSubCode.(float64); ok {
+			subcode = int(f)
+		}
+	}
+	return
+}
+
+const CreateFundraiserEndpoint = "https://graph.facebook.com/v2.8/me/fundraisers"
 
 type CreateFundraiserParams struct {
 
@@ -50,6 +102,8 @@ type CreateFundraiserParams struct {
 	ExternalID string
 }
 
+const FundraiserCoverPhotoImageMaxSize = (4 * 1024 * 1024) - 1 // fundraiser cover photo images must be less than 4 MB
+
 func CreateAPIClient(options ...func(*APIClient) error) (APIClient, error) {
 	c := APIClient{
 		httpClient: &http.Client{Timeout: time.Second * 20},
@@ -70,7 +124,7 @@ func WithLogger(logger Logger, debug bool) func(*APIClient) error {
 	}
 }
 
-func (c APIClient) CreateFundraiser(params CreateFundraiserParams, options ...func(*multipart.Writer) error) (id string, status int, err error) {
+func (c APIClient) CreateFundraiser(params CreateFundraiserParams, options ...func(*multipart.Writer) error) (status int, result map[string]interface{}, err error) {
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -92,37 +146,33 @@ func (c APIClient) CreateFundraiser(params CreateFundraiserParams, options ...fu
 		}
 	}
 	if err != nil {
-		return "", 0, err
+		return 0, nil, err
 	}
 	// add optional fields
 	for _, option := range options {
 		if err := option(writer); err != nil {
-			return "", 0, err
+			return 0, nil, err
 		}
 	}
 	err = writer.Close()
 	if err != nil {
-		return "", 0, err
+		return 0, nil, err
 	}
 	var req *http.Request
-	endpoint := fmt.Sprintf("https://graph.facebook.com/v2.8/me/fundraisers?access_token=%s", params.AccessToken)
-	req, err = http.NewRequest("POST", endpoint, body)
+	req, err = http.NewRequest("POST", CreateFundraiserEndpoint, body)
 	if err != nil {
-		return "", 0, fmt.Errorf("error preparing request %v", err)
+		return 0, nil, fmt.Errorf("error preparing request %v", err)
 	}
+	req.Header.Set("Authorization", "Bearer "+params.AccessToken)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	var res *http.Response
 	res, err = c.httpClient.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("error transporting request %v", err)
+		return 0, nil, fmt.Errorf("error transporting request %v", err)
 	}
 
-	var resBody []byte
-	status, resBody, err = c.readResponse(req, res, http.StatusOK)
-
-	// TODO unmarshal id
-	return string(resBody), status, nil
+	return c.readResponse(CreateFundraiserEndpoint, req, res, http.StatusOK)
 }
 
 func WithFundraiserCoverPhotoImage(name string, content io.Reader) func(*multipart.Writer) error {
@@ -131,7 +181,7 @@ func WithFundraiserCoverPhotoImage(name string, content io.Reader) func(*multipa
 		if err != nil {
 			return err
 		}
-		_, err = io.Copy(part, io.LimitReader(content, (4*1024*1024)-1)) // images must be less than 4 MB
+		_, err = io.Copy(part, &FundraiserCoverPhotoReader{Reader: content, MaxSize: FundraiserCoverPhotoImageMaxSize})
 		return err
 	}
 }
@@ -148,7 +198,7 @@ func WithFundraiserCoverPhotoURL(name string, content url.URL) func(*multipart.W
 			return err
 		}
 		defer res.Body.Close()
-		_, err = io.Copy(part, io.LimitReader(res.Body, (4*1024*1024)-1)) // images must be less than 4 MB
+		_, err = io.Copy(part, &FundraiserCoverPhotoReader{Reader: res.Body, MaxSize: FundraiserCoverPhotoImageMaxSize})
 		return err
 	}
 }
@@ -159,7 +209,25 @@ func WithFundraiserField(name string, value string) func(*multipart.Writer) erro
 	}
 }
 
-func (c APIClient) readResponse(req *http.Request, res *http.Response, expectedstatus int) (status int, body []byte, err error) {
+func IsErrorWithFundraiserCoverPhoto(err error) bool {
+	if err == ErrFundraiserCoverPhotoMaxSizeExceeded {
+		return true
+	}
+	if fe, ok := err.(FacebookError); ok {
+		if fe.Endpoint == CreateFundraiserEndpoint && fe.Status == http.StatusBadRequest {
+			code, subCode := fe.ErrorCodes()
+			// 100 1366046 Your photos couldn't be uploaded. Photos should be smaller than 4 MB and saved as JPG, PNG, GIF, TIFF, HEIF or WebP files.
+			// 100 1366055 Your photo couldn't be uploaded due to restrictions on image dimensions. Photos should be less than 30,000 pixels in any dimension, and less than 80,000,000 pixels in total size.
+			if code == 100 && (subCode == 1366046 || subCode == 1366055) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c APIClient) readResponse(endpoint string, req *http.Request, res *http.Response, expectedstatus int) (status int, result map[string]interface{}, err error) {
+	var body []byte
 	if res != nil {
 		status = res.StatusCode
 		if res.ContentLength > 0 || res.ContentLength == -1 { // -1 represents unknown content length
@@ -182,8 +250,19 @@ func (c APIClient) readResponse(req *http.Request, res *http.Response, expecteds
 	if err != nil {
 		err = fmt.Errorf("error reading response %v", err)
 	}
-	if status != expectedstatus {
-		err = fmt.Errorf("invalid response %d", status)
+	result = make(map[string]interface{})
+	err = json.Unmarshal(body, &result)
+	if err != nil {
+		err = fmt.Errorf("error parsing response %v", err)
 	}
-	return status, body, err
+	if status != expectedstatus {
+		if e, exists := result["error"]; exists {
+			if m, ok := e.(map[string]interface{}); ok {
+				err = FacebookError{Endpoint: endpoint, Status: status, ErrorMap: m}
+			}
+		} else {
+			err = fmt.Errorf("invalid response %d", status)
+		}
+	}
+	return
 }

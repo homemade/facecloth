@@ -2,7 +2,10 @@ package flannel
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"testing"
 	"time"
 )
@@ -30,42 +33,82 @@ func TestCreateFundraiser(t *testing.T) {
 		ExternalID:  externalID,
 	}
 
-	var id string
 	var status int
-	id, status, err = c.CreateFundraiser(params)
-	if err != nil {
-		t.Fatalf("failed to create fundraiser with required fields %v", err)
+	var result map[string]interface{}
+	status, result, err = c.CreateFundraiser(params)
+	checkResult := func(testcase string, status int, result map[string]interface{}, err error) {
+		if err != nil {
+			t.Errorf("failed to create %s %v", testcase, err)
+		}
+		if _, exists := result["id"]; exists {
+			t.Logf("succesfully created %s %d %v", testcase, status, result["id"])
+		} else {
+			t.Errorf("invalid result returned when creating %s %d %v", testcase, status, result)
+		}
 	}
-	t.Logf("succesfully created fundraiser with required fields %s %d", id, status)
+	checkResult("fundraiser with required fields", status, result, err)
 
 	externalID = fmt.Sprintf("%s_2", ts)
 	params.Title = fmt.Sprintf("Test Fundraiser %s", externalID)
 	params.Description = fmt.Sprintf("The description for Test Fundraiser %s", externalID)
 
-	coverPhoto, err := os.Open("./FundraiserCoverPhoto.jpg")
+	// test an image within size limit (< 4MB)
+	httpClient := &http.Client{Timeout: time.Second * 20}
+	res, err := httpClient.Get("https://images.unsplash.com/photo-1576086265779-619d2f54d96b")
 	if err != nil {
-		t.Fatalf("failed to read cover photo %v", err)
+		t.Fatalf("failed to download a test cover photo image %v", err)
 	}
-	defer coverPhoto.Close()
-	id, status, err = c.CreateFundraiser(params, WithFundraiserCoverPhotoImage("FundraiserCoverPhoto.jpg", coverPhoto))
-	if err != nil {
-		t.Fatalf("failed to create fundraiser with cover photo %v", err)
-	}
-	t.Logf("succesfully created fundraiser with cover photo %s %d", id, status)
+	defer res.Body.Close()
+	status, result, err = c.CreateFundraiser(params, WithFundraiserCoverPhotoImage("photo-1576086265779-619d2f54d96b", res.Body))
+	checkResult("fundraiser with cover photo image", status, result, err)
 
 	externalID = fmt.Sprintf("%s_3", ts)
 	params.Title = fmt.Sprintf("Test Fundraiser %s", externalID)
 	params.Description = fmt.Sprintf("The description for Test Fundraiser %s", externalID)
-
-	id, status, err = c.CreateFundraiser(params,
+	status, result, err = c.CreateFundraiser(params,
 		WithFundraiserField("external_fundraiser_uri", "http://www.example.com/"),                                             // URI of the fundraiser on the external site.
 		WithFundraiserField("external_event_name", fmt.Sprintf("The external event name for Test Fundraiser %s", externalID)), // Name of the event this fundraiser belongs to.
 		WithFundraiserField("external_event_uri", "http://www.example.org/"),                                                  // URI of the event this fundraiser belongs to.
 		WithFundraiserField("external_event_start_time", fmt.Sprintf("%d", time.Now().AddDate(0, 0, 1).Unix())),               // Unix timestamp of the day when the event takes place.
 	)
+	checkResult("fundraiser with optional fields", status, result, err)
+
+	externalID = fmt.Sprintf("%s_4", ts)
+	params.Title = fmt.Sprintf("Test Fundraiser %s", externalID)
+	params.Description = fmt.Sprintf("The description for Test Fundraiser %s", externalID)
+	// test an image url within size limit (< 4MB)
+	var coverPhotoURL *url.URL
+	coverPhotoURL, err = url.Parse("https://images.unsplash.com/photo-1576086265779-619d2f54d96b")
 	if err != nil {
-		t.Fatalf("failed to create fundraiser with optional fields %v", err)
+		t.Fatalf("failed to parse test cover photo url %v", err)
 	}
-	t.Logf("succesfully created fundraiser with optional fields %s %d", id, status)
+	status, result, err = c.CreateFundraiser(params, WithFundraiserCoverPhotoURL(path.Base(coverPhotoURL.Path), *coverPhotoURL))
+	checkResult("fundraiser with cover photo url", status, result, err)
+
+	externalID = fmt.Sprintf("%s_5", ts)
+	params.Title = fmt.Sprintf("Test Fundraiser %s", externalID)
+	params.Description = fmt.Sprintf("The description for Test Fundraiser %s", externalID)
+	// test an image url over the size limit (> 4MB)
+	coverPhotoURL, err = url.Parse("https://images.unsplash.com/photo-1576086476234-1103be98f096")
+	if err != nil {
+		t.Fatalf("failed to parse test cover photo url %v", err)
+	}
+	status, result, err = c.CreateFundraiser(params, WithFundraiserCoverPhotoURL(path.Base(coverPhotoURL.Path), *coverPhotoURL))
+	if IsErrorWithFundraiserCoverPhoto(err) {
+		t.Logf("fundraiser with cover photo url over the size limit returned an error as expected: %v", err)
+	}
+
+	externalID = fmt.Sprintf("%s_6", ts)
+	params.Title = fmt.Sprintf("Test Fundraiser %s", externalID)
+	params.Description = fmt.Sprintf("The description for Test Fundraiser %s", externalID)
+	// test an image url over the dimensions limit
+	coverPhotoURL, err = url.Parse("https://via.placeholder.com/30001x1.jpg")
+	if err != nil {
+		t.Fatalf("failed to parse cover photo url %v", err)
+	}
+	status, result, err = c.CreateFundraiser(params, WithFundraiserCoverPhotoURL(path.Base(coverPhotoURL.Path), *coverPhotoURL))
+	if IsErrorWithFundraiserCoverPhoto(err) {
+		t.Logf("fundraiser with cover photo url containing too many pixels returned an error as expected: %v", err)
+	}
 
 }
