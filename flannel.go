@@ -23,6 +23,15 @@ type Logger interface {
 	Logf(format string, args ...interface{})
 }
 
+// The LoggerFunc type is an adapter to allow the use of ordinary functions as Loggers.
+// If f is a function with the appropriate signature, LoggerFunc(f) is a Logger that calls f.
+type LoggerFunc func(format string, args ...interface{})
+
+// Logf calls f(format, args).
+func (f LoggerFunc) Logf(format string, args ...interface{}) {
+	f(format, args)
+}
+
 type FundraiserCoverPhotoReader struct {
 	Reader    io.Reader
 	MaxSize   int
