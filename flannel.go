@@ -65,19 +65,27 @@ func (e FacebookError) Error() string {
 }
 
 func (e FacebookError) ErrorCodes() (code int, subcode int) {
-	rawCode := e.ErrorMap["code"]
-	if rawCode != nil {
-		if f, ok := rawCode.(float64); ok {
-			code = int(f)
+	f := func(key string) int {
+		if v, exists := e.ErrorMap[key]; exists {
+			if i, ok := v.(float64); ok {
+				return int(i)
+			}
 		}
+		return 0
 	}
-	rawSubCode := e.ErrorMap["error_subcode"]
-	if rawSubCode != nil {
-		if f, ok := rawSubCode.(float64); ok {
-			subcode = int(f)
+	return f("code"), f("error_subcode")
+}
+
+func (e FacebookError) Messages() (message string, errorusertitle string, errorusermsg string) {
+	f := func(key string) string {
+		if v, exists := e.ErrorMap[key]; exists {
+			if s, ok := v.(string); ok {
+				return s
+			}
 		}
+		return ""
 	}
-	return
+	return f("message"), f("error_user_title"), f("error_user_msg")
 }
 
 const CreateFundraiserEndpoint = "https://graph.facebook.com/v2.8/me/fundraisers"
@@ -233,6 +241,13 @@ func IsErrorWithFundraiserCoverPhoto(err error) bool {
 		}
 	}
 	return false
+}
+
+func ErrorMessages(err error) (message string, errorusertitle string, errorusermsg string) {
+	if fe, ok := err.(FacebookError); ok {
+		return fe.Messages()
+	}
+	return err.Error(), "", ""
 }
 
 func (c APIClient) readResponse(endpoint string, req *http.Request, res *http.Response, expectedstatus int) (status int, result map[string]interface{}, err error) {
