@@ -20,7 +20,7 @@ type APIClient struct {
 }
 
 type Logger interface {
-	Log(args ...interface{})
+	Logf(format string, args ...interface{})
 }
 
 type FundraiserCoverPhotoReader struct {
@@ -241,9 +241,9 @@ func (c APIClient) readResponse(endpoint string, req *http.Request, res *http.Re
 	defer func() {
 		if c.logger != nil && (c.debugModeEnabled || err != nil) {
 			if len(body) > 0 {
-				c.logger.Log(fmt.Sprintf("facebook api %s request to %s returned %d %s\n", req.Method, req.URL.String(), status, string(body)))
+				c.logger.Logf("facebook api %s request to %s returned %d %s\n", req.Method, req.URL.String(), status, string(body))
 			} else {
-				c.logger.Log(fmt.Sprintf("facebook api %s request to %s returned %d\n", req.Method, req.URL.String(), status))
+				c.logger.Logf("facebook api %s request to %s returned %d\n", req.Method, req.URL.String(), status)
 			}
 		}
 	}()
