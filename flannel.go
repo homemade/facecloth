@@ -32,20 +32,31 @@ func (f LoggerFunc) Logf(format string, args ...interface{}) {
 	f(format, args)
 }
 
-type FundraiserCoverPhotoReader struct {
+type FundraiserCoverPhotoError struct {
+	Err error
+}
+
+func (e FundraiserCoverPhotoError) Error() string {
+	if e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+type RestrictedReader struct {
 	Reader    io.Reader
 	MaxSize   int
 	bytesRead int
 }
 
-var ErrFundraiserCoverPhotoMaxSizeExceeded = errors.New("fundraiser cover photo max size exceeded")
+var ErrMaxSizeExceeded = errors.New("max size exceeded")
 
-func (r *FundraiserCoverPhotoReader) Read(p []byte) (n int, err error) {
+func (r *RestrictedReader) Read(p []byte) (n int, err error) {
 	n, err = r.Reader.Read(p)
 	r.bytesRead = r.bytesRead + n
 	if r.bytesRead > r.MaxSize {
 		// if we have exceeded the max size then override the error
-		err = ErrFundraiserCoverPhotoMaxSizeExceeded
+		err = ErrMaxSizeExceeded
 	}
 	return
 }
@@ -196,10 +207,13 @@ func WithFundraiserCoverPhotoImage(name string, content io.Reader) func(*multipa
 	return func(w *multipart.Writer) error {
 		part, err := w.CreateFormFile("cover_photo", name)
 		if err != nil {
-			return err
+			return FundraiserCoverPhotoError{err}
 		}
-		_, err = io.Copy(part, &FundraiserCoverPhotoReader{Reader: content, MaxSize: FundraiserCoverPhotoImageMaxSize})
-		return err
+		_, err = io.Copy(part, &RestrictedReader{Reader: content, MaxSize: FundraiserCoverPhotoImageMaxSize})
+		if err != nil {
+			return FundraiserCoverPhotoError{err}
+		}
+		return nil
 	}
 }
 
@@ -207,16 +221,19 @@ func WithFundraiserCoverPhotoURL(name string, content url.URL) func(*multipart.W
 	return func(w *multipart.Writer) error {
 		part, err := w.CreateFormFile("cover_photo", name)
 		if err != nil {
-			return err
+			return FundraiserCoverPhotoError{err}
 		}
 		httpClient := &http.Client{Timeout: time.Second * 20}
 		res, err := httpClient.Get(content.String())
 		if err != nil {
-			return err
+			return FundraiserCoverPhotoError{err}
 		}
 		defer res.Body.Close()
-		_, err = io.Copy(part, &FundraiserCoverPhotoReader{Reader: res.Body, MaxSize: FundraiserCoverPhotoImageMaxSize})
-		return err
+		_, err = io.Copy(part, &RestrictedReader{Reader: res.Body, MaxSize: FundraiserCoverPhotoImageMaxSize})
+		if err != nil {
+			return FundraiserCoverPhotoError{err}
+		}
+		return nil
 	}
 }
 
@@ -227,7 +244,7 @@ func WithFundraiserField(name string, value string) func(*multipart.Writer) erro
 }
 
 func IsErrorWithFundraiserCoverPhoto(err error) bool {
-	if err == ErrFundraiserCoverPhotoMaxSizeExceeded {
+	if _, is := err.(FundraiserCoverPhotoError); is {
 		return true
 	}
 	if fe, ok := err.(FacebookError); ok {
