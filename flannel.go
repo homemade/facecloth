@@ -32,16 +32,21 @@ func (f LoggerFunc) Logf(format string, args ...interface{}) {
 	f(format, args)
 }
 
-type FundraiserCoverPhotoError struct {
-	Err error
+type flannelError struct {
+	Type int
+	Err  error
 }
 
-func (e FundraiserCoverPhotoError) Error() string {
+func (e flannelError) Error() string {
 	if e.Err == nil {
 		return ""
 	}
 	return e.Err.Error()
 }
+
+const (
+	errorWithFundraiserCoverPhoto = iota
+)
 
 type RestrictedReader struct {
 	Reader    io.Reader
@@ -61,7 +66,7 @@ func (r *RestrictedReader) Read(p []byte) (n int, err error) {
 	return
 }
 
-type FacebookError struct {
+type facebookError struct {
 	Endpoint string
 
 	Status int
@@ -71,11 +76,11 @@ type FacebookError struct {
 	ErrorMap map[string]interface{}
 }
 
-func (e FacebookError) Error() string {
+func (e facebookError) Error() string {
 	return fmt.Sprintf("%s %d %v", e.Endpoint, e.Status, e.ErrorMap)
 }
 
-func (e FacebookError) ErrorCodes() (code int, subcode int) {
+func (e facebookError) ErrorCodes() (code int, subcode int) {
 	f := func(key string) int {
 		if v, exists := e.ErrorMap[key]; exists {
 			if i, ok := v.(float64); ok {
@@ -87,7 +92,7 @@ func (e FacebookError) ErrorCodes() (code int, subcode int) {
 	return f("code"), f("error_subcode")
 }
 
-func (e FacebookError) Messages() (message string, errorusertitle string, errorusermsg string) {
+func (e facebookError) Messages() (message string, errorusertitle string, errorusermsg string) {
 	f := func(key string) string {
 		if v, exists := e.ErrorMap[key]; exists {
 			if s, ok := v.(string); ok {
@@ -207,11 +212,11 @@ func WithFundraiserCoverPhotoImage(name string, content io.Reader) func(*multipa
 	return func(w *multipart.Writer) error {
 		part, err := w.CreateFormFile("cover_photo", name)
 		if err != nil {
-			return FundraiserCoverPhotoError{err}
+			return flannelError{errorWithFundraiserCoverPhoto, err}
 		}
 		_, err = io.Copy(part, &RestrictedReader{Reader: content, MaxSize: FundraiserCoverPhotoImageMaxSize})
 		if err != nil {
-			return FundraiserCoverPhotoError{err}
+			return flannelError{errorWithFundraiserCoverPhoto, err}
 		}
 		return nil
 	}
@@ -221,17 +226,17 @@ func WithFundraiserCoverPhotoURL(name string, content url.URL) func(*multipart.W
 	return func(w *multipart.Writer) error {
 		part, err := w.CreateFormFile("cover_photo", name)
 		if err != nil {
-			return FundraiserCoverPhotoError{err}
+			return flannelError{errorWithFundraiserCoverPhoto, err}
 		}
 		httpClient := &http.Client{Timeout: time.Second * 20}
 		res, err := httpClient.Get(content.String())
 		if err != nil {
-			return FundraiserCoverPhotoError{err}
+			return flannelError{errorWithFundraiserCoverPhoto, err}
 		}
 		defer res.Body.Close()
 		_, err = io.Copy(part, &RestrictedReader{Reader: res.Body, MaxSize: FundraiserCoverPhotoImageMaxSize})
 		if err != nil {
-			return FundraiserCoverPhotoError{err}
+			return flannelError{errorWithFundraiserCoverPhoto, err}
 		}
 		return nil
 	}
@@ -244,10 +249,10 @@ func WithFundraiserField(name string, value string) func(*multipart.Writer) erro
 }
 
 func IsErrorWithFundraiserCoverPhoto(err error) bool {
-	if _, is := err.(FundraiserCoverPhotoError); is {
-		return true
+	if e, ok := err.(flannelError); ok {
+		return e.Type == errorWithFundraiserCoverPhoto
 	}
-	if fe, ok := err.(FacebookError); ok {
+	if fe, ok := err.(facebookError); ok {
 		if fe.Endpoint == CreateFundraiserEndpoint && fe.Status == http.StatusBadRequest {
 			code, subCode := fe.ErrorCodes()
 			// 100 1366046 Your photos couldn't be uploaded. Photos should be smaller than 4 MB and saved as JPG, PNG, GIF, TIFF, HEIF or WebP files.
@@ -261,10 +266,17 @@ func IsErrorWithFundraiserCoverPhoto(err error) bool {
 }
 
 func ErrorMessages(err error) (message string, errorusertitle string, errorusermsg string) {
-	if fe, ok := err.(FacebookError); ok {
+	if fe, ok := err.(facebookError); ok {
 		return fe.Messages()
 	}
 	return err.Error(), "", ""
+}
+
+func ErrorCodes(err error) (code int, subcode int) {
+	if fe, ok := err.(facebookError); ok {
+		return fe.ErrorCodes()
+	}
+	return 0, 0
 }
 
 func (c APIClient) readResponse(endpoint string, req *http.Request, res *http.Response, expectedstatus int) (status int, result map[string]interface{}, err error) {
@@ -299,7 +311,7 @@ func (c APIClient) readResponse(endpoint string, req *http.Request, res *http.Re
 	if status != expectedstatus {
 		if e, exists := result["error"]; exists {
 			if m, ok := e.(map[string]interface{}); ok {
-				err = FacebookError{Endpoint: endpoint, Status: status, ErrorMap: m}
+				err = facebookError{Endpoint: endpoint, Status: status, ErrorMap: m}
 			}
 		} else {
 			err = fmt.Errorf("invalid response %d", status)
