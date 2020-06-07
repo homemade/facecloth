@@ -13,12 +13,14 @@ import (
 	"time"
 )
 
+// APIClient represents a HTTP client to the Facebook APIs.
 type APIClient struct {
 	httpClient       *http.Client
 	logger           Logger
 	debugModeEnabled bool
 }
 
+// Logger is the interface implemented by the APIClient when logging API calls.
 type Logger interface {
 	Logf(format string, args ...interface{})
 }
@@ -48,22 +50,31 @@ const (
 	errorWithFundraiserCoverPhoto = iota
 )
 
+// A RestrictedReader wraps the provided Reader restricting the
+// amount of data read to the specified MaxSize of bytes.
+// Each call to Read updates BytesRead to reflect the new total.
+// If the MaxSize is exceeded an error is returned.
 type RestrictedReader struct {
 	Reader    io.Reader
 	MaxSize   int
-	bytesRead int
+	BytesRead int
 }
 
-var ErrMaxSizeExceeded = errors.New("max size exceeded")
+var errMaxSizeExceeded = errors.New("max size exceeded")
 
 func (r *RestrictedReader) Read(p []byte) (n int, err error) {
 	n, err = r.Reader.Read(p)
-	r.bytesRead = r.bytesRead + n
-	if r.bytesRead > r.MaxSize {
+	r.BytesRead = r.BytesRead + n
+	if r.BytesRead > r.MaxSize {
 		// if we have exceeded the max size then override the error
-		err = ErrMaxSizeExceeded
+		err = errMaxSizeExceeded
 	}
 	return
+}
+
+// IsMaxSizeExceeded returns true if err is max size exceeded.
+func (r *RestrictedReader) IsMaxSizeExceeded(err error) bool {
+	return err == errMaxSizeExceeded
 }
 
 type facebookError struct {
@@ -104,8 +115,12 @@ func (e facebookError) Messages() (message string, errorusertitle string, erroru
 	return f("message"), f("error_user_title"), f("error_user_msg")
 }
 
-const CreateFundraiserEndpoint = "https://graph.facebook.com/v2.8/me/fundraisers"
+// Facebook API endpoints.
+const (
+	CreateFundraiserEndpoint = "https://graph.facebook.com/v2.8/me/fundraisers"
+)
 
+// CreateFundraiserParams is the set of parameters required to create a Facebook Fundraiser.
 type CreateFundraiserParams struct {
 
 	// AccessToken as provided by Facebook Login for the user creating the fundraiser.
@@ -135,8 +150,10 @@ type CreateFundraiserParams struct {
 	ExternalID string
 }
 
-const FundraiserCoverPhotoImageMaxSize = (4 * 1024 * 1024) - 1 // fundraiser cover photo images must be less than 4 MB
+// FundraiserCoverPhotoImageMaxSize defines the maximum size for fundraiser cover photo images.
+const FundraiserCoverPhotoImageMaxSize = (4 * 1024 * 1024) - 1
 
+// CreateAPIClient creates a new HTTP client to the Facebook APIs with the provided options.
 func CreateAPIClient(options ...func(*APIClient) error) (APIClient, error) {
 	c := APIClient{
 		httpClient: &http.Client{Timeout: time.Second * 20},
@@ -149,6 +166,8 @@ func CreateAPIClient(options ...func(*APIClient) error) (APIClient, error) {
 	return c, nil
 }
 
+// WithLogger adds logging of API calls on error to the APIClient.
+// If the debug flag is set all API calls are logged.
 func WithLogger(logger Logger, debug bool) func(*APIClient) error {
 	return func(c *APIClient) error {
 		c.logger = logger
@@ -157,6 +176,9 @@ func WithLogger(logger Logger, debug bool) func(*APIClient) error {
 	}
 }
 
+// CreateFundraiser creates a new Facebook Fundraiser.
+// Required parameters are set with params.
+// Optional parameters  are set with options.
 func (c APIClient) CreateFundraiser(params CreateFundraiserParams, options ...func(*multipart.Writer) error) (status int, result map[string]interface{}, err error) {
 
 	body := &bytes.Buffer{}
@@ -208,6 +230,7 @@ func (c APIClient) CreateFundraiser(params CreateFundraiserParams, options ...fu
 	return c.readResponse(CreateFundraiserEndpoint, req, res, http.StatusOK)
 }
 
+// WithFundraiserCoverPhotoImage adds an optional cover photo image when creating a new Facebook Fundraiser.
 func WithFundraiserCoverPhotoImage(name string, content io.Reader) func(*multipart.Writer) error {
 	return func(w *multipart.Writer) error {
 		part, err := w.CreateFormFile("cover_photo", name)
@@ -222,6 +245,7 @@ func WithFundraiserCoverPhotoImage(name string, content io.Reader) func(*multipa
 	}
 }
 
+// WithFundraiserCoverPhotoURL adds an optional cover photo when creating a new Facebook Fundraiser.
 func WithFundraiserCoverPhotoURL(name string, content url.URL) func(*multipart.Writer) error {
 	return func(w *multipart.Writer) error {
 		part, err := w.CreateFormFile("cover_photo", name)
@@ -242,12 +266,25 @@ func WithFundraiserCoverPhotoURL(name string, content url.URL) func(*multipart.W
 	}
 }
 
+// WithFundraiserField adds an optional field when creating a new Facebook Fundraiser.
+//
+// The Facebook Fundraiser API supports the following optional fields:
+//
+// external_fundraiser_uri - URI of the fundraiser on the external site
+//
+// external_event_name - Name of the event this fundraiser belongs to
+//
+// external_event_uri - URI of the event this fundraiser belongs to
+//
+// external_event_start_time - Unix timestamp of the day when the event takes place
+//
 func WithFundraiserField(name string, value string) func(*multipart.Writer) error {
 	return func(w *multipart.Writer) error {
 		return w.WriteField(name, value)
 	}
 }
 
+// IsErrorWithFundraiserCoverPhoto returns true if err was returned from WithFundraiserCoverPhotoURL option.
 func IsErrorWithFundraiserCoverPhoto(err error) bool {
 	if e, ok := err.(flannelError); ok {
 		return e.Type == errorWithFundraiserCoverPhoto
@@ -265,6 +302,8 @@ func IsErrorWithFundraiserCoverPhoto(err error) bool {
 	return false
 }
 
+// ErrorMessages extracts any Facebook error messages from err.
+// See https://developers.facebook.com/docs/graph-api/using-graph-api/error-handling/
 func ErrorMessages(err error) (message string, errorusertitle string, errorusermsg string) {
 	if fe, ok := err.(facebookError); ok {
 		return fe.Messages()
@@ -272,6 +311,8 @@ func ErrorMessages(err error) (message string, errorusertitle string, erroruserm
 	return err.Error(), "", ""
 }
 
+// ErrorMessages extracts any Facebook error codes from err.
+// See https://developers.facebook.com/docs/graph-api/using-graph-api/error-handling/
 func ErrorCodes(err error) (code int, subcode int) {
 	if fe, ok := err.(facebookError); ok {
 		return fe.ErrorCodes()
