@@ -311,7 +311,7 @@ func ErrorMessages(err error) (message string, errorusertitle string, erroruserm
 	return err.Error(), "", ""
 }
 
-// ErrorMessages extracts any Facebook error codes from err.
+// ErrorCodes extracts any Facebook error codes from err.
 // See https://developers.facebook.com/docs/graph-api/using-graph-api/error-handling/
 func ErrorCodes(err error) (code int, subcode int) {
 	if fe, ok := err.(facebookError); ok {
