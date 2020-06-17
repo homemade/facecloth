@@ -29,9 +29,9 @@ type Logger interface {
 // If f is a function with the appropriate signature, LoggerFunc(f) is a Logger that calls f.
 type LoggerFunc func(format string, args ...interface{})
 
-// Logf calls f(format, args).
+// Logf calls f(format, args...).
 func (f LoggerFunc) Logf(format string, args ...interface{}) {
-	f(format, args)
+	f(format, args...)
 }
 
 type flannelError struct {
